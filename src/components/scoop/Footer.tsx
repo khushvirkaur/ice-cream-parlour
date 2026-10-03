@@ -182,15 +182,6 @@ export function Footer() {
               <Lock className="h-3 w-3 text-[#C8E6C9]" />
               256-Bit SSL Encrypted Checkout
             </span>
-            <span className="hidden sm:inline text-white/20">|</span>
-            <a
-              href="/admin"
-              className="flex items-center gap-1 text-[#8D7B75] hover:text-[#F48FB1] transition-colors"
-              title="Admin Portal Login"
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              <span>Admin Portal</span>
-            </a>
           </div>
 
           <div className="flex flex-wrap items-center justify-center sm:justify-end gap-3.5 sm:gap-5">

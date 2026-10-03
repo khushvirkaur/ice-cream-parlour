@@ -1,10 +1,15 @@
-import React, { useState } from "react";
-import { Lock, User, Eye, EyeOff, ShieldCheck, Key, ArrowRight, Sparkles, AlertCircle } from "lucide-react";
-import { loginAdmin, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD } from "@/lib/analytics";
+import React, { useState, useEffect } from "react";
+import { Lock, User, Eye, EyeOff, ShieldCheck, ArrowRight, AlertCircle, Clock } from "lucide-react";
+import { loginAdmin } from "@/lib/analytics";
 
 interface AdminLoginProps {
   onSuccess: () => void;
 }
+
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+const ATTEMPTS_KEY = "scoop_admin_fail_attempts";
+const LOCKOUT_KEY = "scoop_admin_lockout_until";
 
 export function AdminLogin({ onSuccess }: AdminLoginProps) {
   const [username, setUsername] = useState("");
@@ -12,10 +17,37 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [lockoutRemaining, setLockoutRemaining] = useState<number>(0);
+
+  // Check lockout status on mount & interval
+  useEffect(() => {
+    const checkLockout = () => {
+      const lockoutUntil = parseInt(localStorage.getItem(LOCKOUT_KEY) || "0", 10);
+      const now = Date.now();
+      if (lockoutUntil > now) {
+        setLockoutRemaining(Math.ceil((lockoutUntil - now) / 1000));
+      } else {
+        setLockoutRemaining(0);
+        if (lockoutUntil > 0) {
+          localStorage.removeItem(LOCKOUT_KEY);
+          localStorage.removeItem(ATTEMPTS_KEY);
+        }
+      }
+    };
+
+    checkLockout();
+    const timer = setInterval(checkLockout, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg("");
+
+    if (lockoutRemaining > 0) {
+      setErrorMsg(`Access temporarily locked. Please wait ${Math.ceil(lockoutRemaining / 60)} minutes.`);
+      return;
+    }
 
     if (!username.trim() || !password) {
       setErrorMsg("Please enter both username and password.");
@@ -26,18 +58,32 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
     setTimeout(() => {
       const ok = loginAdmin(username, password);
       setIsLoading(false);
+      
       if (ok) {
+        localStorage.removeItem(ATTEMPTS_KEY);
+        localStorage.removeItem(LOCKOUT_KEY);
         onSuccess();
       } else {
-        setErrorMsg("Invalid username or password. Check credentials and try again.");
+        const currentAttempts = parseInt(localStorage.getItem(ATTEMPTS_KEY) || "0", 10) + 1;
+        localStorage.setItem(ATTEMPTS_KEY, currentAttempts.toString());
+
+        if (currentAttempts >= MAX_FAILED_ATTEMPTS) {
+          const lockUntil = Date.now() + LOCKOUT_DURATION_MS;
+          localStorage.setItem(LOCKOUT_KEY, lockUntil.toString());
+          setLockoutRemaining(Math.ceil(LOCKOUT_DURATION_MS / 1000));
+          setErrorMsg(`Too many failed attempts. Security lockout active for 15 minutes.`);
+        } else {
+          const remaining = MAX_FAILED_ATTEMPTS - currentAttempts;
+          setErrorMsg(`Invalid username or password. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining before temporary lockout.`);
+        }
       }
-    }, 500);
+    }, 600);
   };
 
-  const handleFillCredentials = () => {
-    setUsername(DEFAULT_ADMIN_USERNAME);
-    setPassword(DEFAULT_ADMIN_PASSWORD);
-    setErrorMsg("");
+  const formatLockoutTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
   };
 
   return (
@@ -60,7 +106,7 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
             Delicious Scoops
           </h1>
           <p className="text-xs sm:text-sm text-[#A6928B] mt-1 font-medium">
-            Executive Admin & Business Analytics Portal
+            Authorized Personnel Only
           </p>
         </div>
 
@@ -69,19 +115,29 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
           <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-6">
             <div>
               <h2 className="text-base font-bold text-white">Administrator Sign In</h2>
-              <p className="text-xs text-[#8D7B75] mt-0.5">Secure authentication required</p>
+              <p className="text-xs text-[#8D7B75] mt-0.5">Enter secret master credentials</p>
             </div>
             <span className="rounded-full bg-[#D8436B]/20 border border-[#D8436B]/40 px-2.5 py-1 text-[10px] font-bold text-[#F48FB1] uppercase tracking-wider">
-              256-Bit Encrypted
+              Protected
             </span>
           </div>
 
-          {errorMsg && (
+          {lockoutRemaining > 0 ? (
+            <div className="mb-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 text-xs text-amber-200 flex items-start gap-3">
+              <Clock className="h-5 w-5 shrink-0 text-amber-400 mt-0.5" />
+              <div>
+                <p className="font-bold text-amber-300">Security Lockout Active</p>
+                <p className="mt-1 text-amber-200/80">
+                  Too many incorrect attempts. Please wait <span className="font-mono font-bold text-white">{formatLockoutTime(lockoutRemaining)}</span> before trying again.
+                </p>
+              </div>
+            </div>
+          ) : errorMsg ? (
             <div className="mb-5 rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-300 flex items-start gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
-          )}
+          ) : null}
 
           <form onSubmit={handleLogin} className="space-y-4">
             
@@ -98,8 +154,9 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Enter admin username"
                   autoComplete="username"
+                  disabled={lockoutRemaining > 0 || isLoading}
                   required
-                  className="w-full rounded-xl bg-[#18110F] border border-white/15 pl-10 pr-4 py-3 text-xs sm:text-sm text-white placeholder-[#5C4A44] focus:border-[#D8436B] focus:outline-none focus:ring-1 focus:ring-[#D8436B] transition-all"
+                  className="w-full rounded-xl bg-[#18110F] border border-white/15 pl-10 pr-4 py-3 text-xs sm:text-sm text-white placeholder-[#5C4A44] focus:border-[#D8436B] focus:outline-none focus:ring-1 focus:ring-[#D8436B] transition-all disabled:opacity-50"
                 />
               </div>
             </div>
@@ -108,7 +165,7 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="block text-xs font-semibold text-[#C8B8B2] uppercase tracking-wider">
-                  Master Password
+                  Password
                 </label>
               </div>
               <div className="relative">
@@ -119,8 +176,9 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••••••"
                   autoComplete="current-password"
+                  disabled={lockoutRemaining > 0 || isLoading}
                   required
-                  className="w-full rounded-xl bg-[#18110F] border border-white/15 pl-10 pr-10 py-3 text-xs sm:text-sm text-white placeholder-[#5C4A44] focus:border-[#D8436B] focus:outline-none focus:ring-1 focus:ring-[#D8436B] transition-all"
+                  className="w-full rounded-xl bg-[#18110F] border border-white/15 pl-10 pr-10 py-3 text-xs sm:text-sm text-white placeholder-[#5C4A44] focus:border-[#D8436B] focus:outline-none focus:ring-1 focus:ring-[#D8436B] transition-all disabled:opacity-50"
                 />
                 <button
                   type="button"
@@ -136,40 +194,19 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
             {/* Submit Button */}
             <button
               type="submit"
-              disabled={isLoading}
-              className="w-full mt-2 flex items-center justify-center gap-2 rounded-xl bg-[#D8436B] py-3.5 text-xs sm:text-sm font-bold text-white shadow-lg hover:bg-[#C2335B] transition-all active:scale-98 disabled:opacity-50 cursor-pointer"
+              disabled={isLoading || lockoutRemaining > 0}
+              className="w-full mt-3 flex items-center justify-center gap-2 rounded-xl bg-[#D8436B] py-3.5 text-xs sm:text-sm font-bold text-white shadow-lg hover:bg-[#C2335B] transition-all active:scale-98 disabled:opacity-50 cursor-pointer"
             >
               {isLoading ? (
                 <span>Verifying credentials...</span>
               ) : (
                 <>
-                  <span>Access Admin Panel</span>
+                  <span>Sign In</span>
                   <ArrowRight className="h-4 w-4" />
                 </>
               )}
             </button>
           </form>
-
-          {/* Quick Helper / Demo Credentials Assistant */}
-          <div className="mt-6 border-t border-white/10 pt-4 bg-[#18110F]/60 rounded-2xl p-3.5 border border-white/5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-[#A6928B] flex items-center gap-1.5">
-                <Key className="h-3 w-3 text-[#F48FB1]" />
-                Configured Master Credentials:
-              </span>
-              <button
-                type="button"
-                onClick={handleFillCredentials}
-                className="text-[10px] font-bold text-[#F48FB1] hover:underline cursor-pointer bg-[#D8436B]/15 px-2 py-0.5 rounded-full"
-              >
-                Auto-Fill
-              </button>
-            </div>
-            <div className="mt-2 space-y-1 text-[11px] font-mono text-[#C8B8B2] bg-[#120C0A] p-2 rounded-lg border border-white/5">
-              <div>User: <span className="text-white font-semibold">{DEFAULT_ADMIN_USERNAME}</span></div>
-              <div>Pass: <span className="text-emerald-400 font-semibold">{DEFAULT_ADMIN_PASSWORD}</span></div>
-            </div>
-          </div>
 
         </div>
 
@@ -179,7 +216,7 @@ export function AdminLogin({ onSuccess }: AdminLoginProps) {
             href="/"
             className="text-xs text-[#8D7B75] hover:text-white transition-colors"
           >
-            ← Return to Parlour Storefront
+            ← Return to Storefront
           </a>
         </div>
 
